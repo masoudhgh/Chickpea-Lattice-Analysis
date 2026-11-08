@@ -4,3 +4,4 @@
 .Ruserdata
 *.csv
 !Data.csv
+*.Rproj
