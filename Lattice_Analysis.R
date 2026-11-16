@@ -1,5 +1,5 @@
 # ============================================================
-# Lattice 6x6 Analysis Script (Exact ANOVA Table like SAS)
+# Lattice 6x6 Analysis Script (With CV% Added)
 # ============================================================
 
 if (!require("agricolae")) install.packages("agricolae")
@@ -18,47 +18,64 @@ traits <- c("VGA", "DHE", "DMA", "PLH", "DTP", "TKW",
             "Resistant", "YLD", "SiP", "NMB", "NSB", "HFP", "PIP")
 
 # ============================================================
-# تابع ساخت جدول دقیق تجزیه واریانس لاتیس (مطابق عکس)
+# تابع ساخت جدول دقیق تجزیه واریانس لاتیس (با CV%)
 # ============================================================
 generate_lattice_anova <- function(y, rep, block, trt, trait_name) {
   
-  # مدل 1: RCBD (بدون بلوک) -> برای تیمار تصحیح نشده و خطای RCBD
-  m_unadj <- lm(y ~ rep + trt)
+  # ساخت دیتافریم داخلی
+  df_model <- data.frame(
+    Y = as.numeric(y),
+    Rep = as.factor(rep),
+    Block = as.factor(block),
+    Trt = as.factor(trt)
+  )
+  
+  # میانگین کل صفت
+  grand_mean <- mean(df_model$Y, na.rm = TRUE)
+  
+  # ساخت بلوک آشیانه‌شده درون تکرار
+  df_model$RepBlock <- interaction(df_model$Rep, df_model$Block, drop = TRUE)
+  
+  # مدل 1: RCBD
+  m_unadj <- lm(Y ~ Rep + Trt, data = df_model)
   a_unadj <- anova(m_unadj)
   
-  # مدل 2: Lattice (با بلوک) -> برای تیمار تصحیح شده، بلوک و خطای داخل بلوک
-  m_adj <- lm(y ~ rep + block + trt)
+  # مدل 2: Lattice (با بلوک آشیانه‌شده)
+  m_adj <- lm(Y ~ Rep + RepBlock + Trt, data = df_model)
   a_adj <- anova(m_adj)
   
-  v <- length(unique(trt))
-  r <- length(unique(rep))
-  k <- length(unique(block)) / r
+  v <- length(unique(df_model$Trt))
+  r <- length(unique(df_model$Rep))
   
   # استخراج درجات آزادی (df)
-  df_rep <- a_adj["rep", "Df"]
-  df_unadj_trt <- a_unadj["trt", "Df"]
-  df_adj_trt <- a_adj["trt", "Df"]
-  df_block <- a_adj["block", "Df"]
-  df_rcbd_err <- a_unadj["Residuals", "Df"]
-  df_intra_err <- a_adj["Residuals", "Df"]
+  df_rep <- a_adj["Rep", "Df"]
+  df_unadj_trt <- a_unadj["Trt", "Df"]
+  df_adj_trt <- a_adj["Trt", "Df"]
+  df_block <- a_adj["RepBlock", "Df"]  
+  df_rcbd_err <- a_unadj["Residuals", "Df"] 
+  df_intra_err <- a_adj["Residuals", "Df"]  
   
   # استخراج میانگین مربعات (MS)
-  ms_rep <- a_adj["rep", "Mean Sq"]
-  ms_unadj_trt <- a_unadj["trt", "Mean Sq"]
-  ms_adj_trt <- a_adj["trt", "Mean Sq"]
-  ms_block <- a_adj["block", "Mean Sq"]
+  ms_rep <- a_adj["Rep", "Mean Sq"]
+  ms_unadj_trt <- a_unadj["Trt", "Mean Sq"]
+  ms_adj_trt <- a_adj["Trt", "Mean Sq"]
+  ms_block <- a_adj["RepBlock", "Mean Sq"]
   ms_rcbd_err <- a_unadj["Residuals", "Mean Sq"]
   ms_intra_err <- a_adj["Residuals", "Mean Sq"]
   
-  # محاسبه خطای موثر (Effective Error) - فرمول کاکرین و کاکس
+  # محاسبه CV% (بر اساس خطای داخل بلوکی و میانگین کل)
+  cv_val <- (sqrt(ms_intra_err) / grand_mean) * 100
+  cv_str <- sprintf("%.2f", cv_val) # فرمت کردن به 2 رقم اعشار
+  
+  # محاسبه خطای موثر
   loss <- ((v-1) * (ms_rcbd_err - ms_intra_err)) / ms_rcbd_err
   ms_eff_err <- ms_intra_err * (v-1) / (v-1 - loss)
   if(is.na(ms_eff_err) || ms_eff_err == ms_rcbd_err) ms_eff_err <- ms_intra_err
   
-  # استخراج P-value برای ستاره‌گذاری
-  p_unadj_trt <- a_unadj["trt", "Pr(>F)"]
-  p_adj_trt <- a_adj["trt", "Pr(>F)"]
-  p_block <- a_adj["block", "Pr(>F)"]
+  # استخراج P-value
+  p_unadj_trt <- a_unadj["Trt", "Pr(>F)"]
+  p_adj_trt <- a_adj["Trt", "Pr(>F)"]
+  p_block <- a_adj["RepBlock", "Pr(>F)"]
   
   get_stars <- function(p) {
     if(is.na(p)) return("")
@@ -69,7 +86,7 @@ generate_lattice_anova <- function(y, rep, block, trt, trait_name) {
     return("ns")
   }
   
-  # ساخت جدول نهایی
+  # ساخت جدول نهایی (اضافه شدن ستون CV)
   res_table <- data.frame(
     Source = c("Replication", 
                "Treatment (unadjusted)", 
@@ -80,6 +97,7 @@ generate_lattice_anova <- function(y, rep, block, trt, trait_name) {
                "Intra-block Error"),
     df = c(df_rep, df_unadj_trt, df_adj_trt, df_block, df_intra_err, df_rcbd_err, df_intra_err),
     Mean_Sq = round(c(ms_rep, ms_unadj_trt, ms_adj_trt, ms_block, ms_eff_err, ms_rcbd_err, ms_intra_err), 3),
+    CV_percent = c("", "", "", "", "", "", cv_str), # قرار دادن CV در ردیف خطای داخل بلوکی
     Sig = c("", 
             get_stars(p_unadj_trt), 
             get_stars(p_adj_trt), 
@@ -88,8 +106,9 @@ generate_lattice_anova <- function(y, rep, block, trt, trait_name) {
     stringsAsFactors = FALSE
   )
   
-  # نام‌گذاری ستون MS به اسم صفت
   colnames(res_table)[3] <- paste0(trait_name, " (MS)")
+  colnames(res_table)[4] <- "CV (%)"
+  
   return(res_table)
 }
 
@@ -123,4 +142,4 @@ for (trait in traits) {
   write.csv(anova_table, file.path(work_dir, paste0(trait, "_Full_ANOVA.csv")), row.names = FALSE)
 }
 
-cat("\n✔ تمام جدول‌های ANOVA کامل در پوشه", work_dir, "ذخیره شدند.\n")
+cat("\n✔ تمام جدول‌های ANOVA کامل به همراه CV% در پوشه", work_dir, "ذخیره شدند.\n")
